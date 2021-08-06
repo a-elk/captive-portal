@@ -1,0 +1,56 @@
+#!/bin/bash -x
+
+# créer les namespaces pour les hôtes
+ip netns add h1
+ip netns add h2
+
+# créer le switch
+ovs-vsctl add-br  openvswitch
+
+# créer les liens
+ip link add h1-eth0 type veth peer name openvswitch-h1
+ip link add h2-eth0 type veth peer name openvswitch-h2
+
+# accrocher les liens aux namespaces
+ip link set h1-eth0 netns h1
+ip link set h2-eth0 netns h2
+
+# connecter les liens au switch
+ovs-vsctl add-port openvswitch openvswitch-h1
+ovs-vsctl add-port openvswitch openvswitch-h2
+
+# activer les interfaces du namespace root
+ip link set dev openvswitch-h1 up
+ip link set dev openvswitch-h2 up
+
+# activer les interfaces des namespaces h1 et h2 
+ip netns exec h1 ip link set dev h1-eth0 up
+ip netns exec h2 ip link set dev h2-eth0 up
+ip netns exec h1 ip link set dev lo up
+ip netns exec h2 ip link set dev lo up
+
+# configurer les réseaux sur s1, s2 et internet
+#ip netns exec h1 ip a add dev h1-eth0 10.10.10.10/24
+#ip netns exec h2 ip a add dev h2-eth0 10.10.10.11/24
+
+ip link set openvswitch up
+ip a add dev openvswitch 10.10.10.1/24
+
+# configurer la route par défaut sur h1 et h2
+ip netns exec h1 ip r add default via 10.10.10.1
+ip netns exec h2 ip r add default via 10.10.10.1
+
+#activer routage 
+sysctl net.ipv4.conf.all.forwarding=1
+
+export routeur=10.10.10.1
+#ip netns exec r2 sudo sysctl net.ipv4.conf.all.forwarding=1
+iptables -t filter -P FORWARD DROP
+iptables -t nat -A POSTROUTING -s 10.10.10.0/24 -p udp --dport 53 -j MASQUERADE
+iptables -t nat -A PREROUTING -s 10.10.10.0/24 -p tcp  --dport 80 -j REDIRECT --to-port 3128
+iptables  -A FORWARD  -i openvswitch -p udp --dport 53 -j ACCEPT
+iptables  -A FORWARD -m state --state ESTABLISHED,RELATED  -j ACCEPT
+
+
+# mettre en place la limitation à 100Mbps
+tc qdisc add dev internet-r2 root tbf rate 100Mbit latency 50ms burst 1M
